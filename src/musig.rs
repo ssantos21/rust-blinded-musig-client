@@ -1,7 +1,7 @@
 use std::str::FromStr;
 
 use bitcoin::hashes::sha256;
-use secp256k1_zkp::{PublicKey, SecretKey, Secp256k1, musig::{MusigKeyAggCache, MusigSessionId, MusigPubNonce, MusigAggNonce, BlindingFactor, MusigSession, MusigPartialSignature}, new_musig_nonce_pair, Message, KeyPair};
+use secp256k1_zkp::{PublicKey, SecretKey, Secp256k1, musig::{MusigKeyAggCache, MusigSessionId, MusigPubNonce, MusigAggNonce, BlindingFactor, MusigSession, MusigPartialSignature}, new_musig_nonce_pair, Message, KeyPair, XOnlyPublicKey};
 use serde::{Serialize, Deserialize};
 use sqlx::{Sqlite, Row};
 
@@ -16,9 +16,7 @@ pub struct ServerPublicKeyResponsePayload<'r> {
     server_pubkey: &'r str,
 }
 
-pub async fn create_agg_pub_key(pool: &sqlx::Pool<Sqlite>) -> Result<String, CError> {
-    println!("Create Aggregated Public Key");
-
+pub async fn create_agg_pub_key(pool: &sqlx::Pool<Sqlite>, client_secret_key: &SecretKey, client_pubkey: &PublicKey, bip32index: u32) -> Result<XOnlyPublicKey, CError> {
     let endpoint = "http://127.0.0.1:8000";
     let path = "server_pubkey";
 
@@ -39,18 +37,19 @@ pub async fn create_agg_pub_key(pool: &sqlx::Pool<Sqlite>) -> Result<String, CEr
 
     let server_pubkey = PublicKey::from_str(&response.server_pubkey.to_string()).unwrap();
 
-    let client_secret_key = SecretKey::new(&mut rand::thread_rng());
+    // let client_secret_key: SecretKey = SecretKey::new(&mut rand::thread_rng());
 
     let secp = Secp256k1::new();
     
-    let client_pubkey = client_secret_key.public_key(&secp);
+    // let client_pubkey: PublicKey = client_secret_key.public_key(&secp);
 
-    let key_agg_cache = MusigKeyAggCache::new(&secp, &[client_pubkey, server_pubkey]);
+    let key_agg_cache = MusigKeyAggCache::new(&secp, &[*client_pubkey, server_pubkey]);
     let agg_pk = key_agg_cache.agg_pk();
 
-    let query = "INSERT INTO signer_data (client_seckey, client_pubkey, server_pubkey, aggregated_key) VALUES ($1, $2, $3, $4)";
+    let query = "INSERT INTO signer_data (bip32_index, client_seckey, client_pubkey, server_pubkey, aggregated_key) VALUES ($1, $2, $3, $4, $5)";
 
     let _ = sqlx::query(query)
+        .bind(bip32index)
         .bind(&client_secret_key.secret_bytes().to_vec())
         .bind(&client_pubkey.serialize().to_vec())
         .bind(&server_pubkey.serialize().to_vec())
@@ -59,7 +58,7 @@ pub async fn create_agg_pub_key(pool: &sqlx::Pool<Sqlite>) -> Result<String, CEr
         .await
         .unwrap();
 
-    Ok(agg_pk.to_string())
+    Ok(agg_pk)
 
 }
 

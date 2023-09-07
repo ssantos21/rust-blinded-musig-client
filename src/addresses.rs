@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use rand::RngCore;
 use secp256k1_zkp::{ffi::types::AlignedType, Secp256k1, SecretKey, PublicKey};
-use bitcoin::{bip32::{ExtendedPrivKey, DerivationPath, ExtendedPubKey, ChildNumber}, Address, Network};
+use bitcoin::{bip32::{ExtendedPrivKey, DerivationPath, ExtendedPubKey, ChildNumber}, Network};
 use sqlx::{Sqlite, Row};
 
 

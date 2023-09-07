@@ -1,13 +1,16 @@
 mod musig;
 mod addresses;
+mod backend;
+mod wallet;
 
 use bitcoin::Address;
 use clap::{Parser, Subcommand};
 use secp256k1_zkp::Secp256k1;
+use serde::{Serialize, Deserialize};
 use serde_json::json;
 use sqlx::{SqlitePool, Sqlite, migrate::MigrateDatabase};
 
-use crate::addresses::{generate_new_key, get_next_bip32_index};
+use crate::{addresses::{generate_new_key, get_next_bip32_index}, wallet::get_all_addresses};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -25,12 +28,17 @@ enum Commands {
     ListAggPubKeys {},
     /// Sign Message
     SignMessage { agg_pub_key: String, message: String },
+    /// Get a wallet balance
+    GetBalance { },
 }
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
 
-    let network = bitcoin::Network::Bitcoin;
+    // let network = bitcoin::Network::Bitcoin;
+    let network = bitcoin::Network::Signet;
+
+    let client = electrum_client::Client::new("tcp://127.0.0.1:50001").unwrap();
 
     let cli = Cli::parse();
 
@@ -79,6 +87,27 @@ async fn main() {
             });
             println!("{}", serde_json::to_string_pretty(&res).unwrap());
         },
+        Commands::GetBalance {  } => {
+
+            #[derive(Serialize, Deserialize, Debug)]
+            struct Balance {
+                address: String,
+                balance: u64,
+                unconfirmed_balance: i64,
+            }
+
+            let addresses = get_all_addresses(&pool, network).await;
+            let result: Vec<Balance> = addresses.iter().map(|address| {
+                let balance_res = backend::get_address_balance(&client, &address);
+                Balance {
+                    address: address.to_string(),
+                    balance: balance_res.confirmed,
+                    unconfirmed_balance: balance_res.unconfirmed,
+                }
+            }).collect();
+
+            println!("{}", serde_json::to_string_pretty(&json!(result)).unwrap());
+        }
     }
 
     pool.close().await;

@@ -28,6 +28,11 @@ enum Commands {
     SignMessage { agg_pub_key: String, message: String },
     /// Get a wallet balance
     GetBalance { },
+    /// List transactions
+    ListTransactions { },
+    /// Send coin to an address
+    Send { address: String, amount: u64 },
+    
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -105,6 +110,35 @@ async fn main() {
             }).collect();
 
             println!("{}", serde_json::to_string_pretty(&json!(result)).unwrap());
+        },
+        Commands::ListTransactions { } => {
+
+            #[derive(Serialize, Deserialize, Debug)]
+            struct History {
+                address: String,
+                tx_hash: String,
+                height: i32,
+            }
+
+            let addresses = get_all_addresses(&pool, network).await;
+            let mut result: Vec<History> = Vec::new();
+
+            for address in addresses {
+                let history_vector = backend::get_address_history(&client, &address);
+                for history in history_vector {
+                    result.push(History {
+                        address: address.to_string(),
+                        tx_hash: history.tx_hash.to_string(),
+                        height: history.height,
+                    });
+                }
+            }
+            
+            println!("{}", serde_json::to_string_pretty(&json!(result)).unwrap());
+        },
+        Commands::Send { address, amount } => {
+            // let txid = backend::send_to_address(&client, &address, amount).await;
+            // println!("{}", txid);
         }
     }
 

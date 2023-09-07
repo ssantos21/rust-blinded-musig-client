@@ -22,3 +22,9 @@ pub async fn get_all_addresses(pool: &sqlx::Pool<Sqlite>, network: Network) -> V
 
     addresses
 }
+
+pub async fn create_transaction(address: String, amount: u64, network: Network) {
+
+    
+
+}

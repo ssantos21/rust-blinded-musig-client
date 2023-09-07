@@ -4,5 +4,5 @@ CREATE TABLE IF NOT EXISTS signer_data (
     client_pubkey BLOB,
     server_pubkey BLOB,
     aggregated_key BLOB,
-    cache BLOB
+    p2tr_address TEXT
 );

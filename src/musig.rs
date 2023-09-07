@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use bitcoin::hashes::sha256;
+use bitcoin::{hashes::sha256, Network, Address};
 use secp256k1_zkp::{PublicKey, SecretKey, Secp256k1, musig::{MusigKeyAggCache, MusigSessionId, MusigPubNonce, MusigAggNonce, BlindingFactor, MusigSession, MusigPartialSignature}, new_musig_nonce_pair, Message, KeyPair, XOnlyPublicKey};
 use serde::{Serialize, Deserialize};
 use sqlx::{Sqlite, Row};
@@ -16,7 +16,7 @@ pub struct ServerPublicKeyResponsePayload<'r> {
     server_pubkey: &'r str,
 }
 
-pub async fn create_agg_pub_key(pool: &sqlx::Pool<Sqlite>, client_secret_key: &SecretKey, client_pubkey: &PublicKey, bip32index: u32) -> Result<XOnlyPublicKey, CError> {
+pub async fn create_agg_pub_key(pool: &sqlx::Pool<Sqlite>, client_secret_key: &SecretKey, client_pubkey: &PublicKey, bip32index: u32, network: Network) -> Result<(XOnlyPublicKey,Address), CError> {
     let endpoint = "http://127.0.0.1:8000";
     let path = "server_pubkey";
 
@@ -46,7 +46,9 @@ pub async fn create_agg_pub_key(pool: &sqlx::Pool<Sqlite>, client_secret_key: &S
     let key_agg_cache = MusigKeyAggCache::new(&secp, &[*client_pubkey, server_pubkey]);
     let agg_pk = key_agg_cache.agg_pk();
 
-    let query = "INSERT INTO signer_data (bip32_index, client_seckey, client_pubkey, server_pubkey, aggregated_key) VALUES ($1, $2, $3, $4, $5)";
+    let address = Address::p2tr(&Secp256k1::new(), agg_pk, None, network);
+
+    let query = "INSERT INTO signer_data (bip32_index, client_seckey, client_pubkey, server_pubkey, aggregated_key, p2tr_address) VALUES ($1, $2, $3, $4, $5, $6)";
 
     let _ = sqlx::query(query)
         .bind(bip32index)
@@ -54,11 +56,12 @@ pub async fn create_agg_pub_key(pool: &sqlx::Pool<Sqlite>, client_secret_key: &S
         .bind(&client_pubkey.serialize().to_vec())
         .bind(&server_pubkey.serialize().to_vec())
         .bind(&agg_pk.serialize().to_vec())
+        .bind(&address.to_string())
         .execute(pool)
         .await
         .unwrap();
 
-    Ok(agg_pk)
+    Ok((agg_pk, address))
 
 }
 

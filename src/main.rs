@@ -3,9 +3,7 @@ mod addresses;
 mod backend;
 mod wallet;
 
-use bitcoin::Address;
 use clap::{Parser, Subcommand};
-use secp256k1_zkp::Secp256k1;
 use serde::{Serialize, Deserialize};
 use serde_json::json;
 use sqlx::{SqlitePool, Sqlite, migrate::MigrateDatabase};
@@ -64,8 +62,8 @@ async fn main() {
 
             let (secret_key, public_key) = generate_new_key(network, bip32_index);
 
-            let aggregated_pubkey = musig::create_agg_pub_key(&pool, &secret_key, &public_key, bip32_index).await.unwrap();
-            let address = Address::p2tr(&Secp256k1::new(), aggregated_pubkey, None, network);
+            let (aggregated_pubkey, address) = 
+                musig::create_agg_pub_key(&pool, &secret_key, &public_key, bip32_index, network).await.unwrap();
             
             let res = json!({
                 "aggregated_pubkey_address": aggregated_pubkey.to_string(),

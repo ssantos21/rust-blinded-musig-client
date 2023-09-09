@@ -3,6 +3,9 @@ mod addresses;
 mod backend;
 mod wallet;
 
+use std::str::FromStr;
+
+use bitcoin::{TxOut, Address};
 use clap::{Parser, Subcommand};
 use serde::{Serialize, Deserialize};
 use serde_json::json;
@@ -31,7 +34,7 @@ enum Commands {
     /// List transactions
     ListTransactions { },
     /// Send coin to an address
-    Send { address: String, amount: u64 },
+    Send { address: String, amount: u64, fees: u64 },
     
 }
 
@@ -62,16 +65,10 @@ async fn main() {
     match cli.command {
         Commands::CreateAggPubKey {} => {
 
-            let bip32_index = get_next_bip32_index(&pool).await;
-            println!("Next index: {}", bip32_index);
-
-            let (secret_key, public_key) = generate_new_key(network, bip32_index);
-
-            let (aggregated_pubkey, address) = 
-                musig::create_agg_pub_key(&pool, &secret_key, &public_key, bip32_index, network).await.unwrap();
+            let public_key = generate_new_key(&pool, network, false).await;
+            let address = musig::create_agg_pub_key(&pool, &&public_key, network).await.unwrap();
             
             let res = json!({
-                "aggregated_pubkey_address": aggregated_pubkey.to_string(),
                 "address": address
             });
             println!("{}", serde_json::to_string_pretty(&res).unwrap());
@@ -136,9 +133,87 @@ async fn main() {
             
             println!("{}", serde_json::to_string_pretty(&json!(result)).unwrap());
         },
-        Commands::Send { address, amount } => {
+        Commands::Send { address, amount,  fees } => {
             // let txid = backend::send_to_address(&client, &address, amount).await;
             // println!("{}", txid);
+
+            let to_address = Address::from_str(&address).unwrap().require_network(network).unwrap();
+
+            let public_key = generate_new_key(&pool, network, true).await;
+            let change_address = musig::create_agg_pub_key(&pool, &&public_key, network).await.unwrap();
+            
+            let amount_to_send_in_sats = bitcoin::Amount::from_sat(amount);
+
+            let mut list_unspent = Vec::<wallet::UTXOInfo>::new(); 
+
+            let addresses = wallet::get_all_addresses_info(&pool, network).await;
+
+            for address_info in addresses {
+
+                let address = address_info.0;
+                let client_seckey = address_info.1;
+                let client_pubkey = address_info.2;
+                let server_pubkey = address_info.3;
+                let aggregated_pubkey = address_info.4;
+
+                let address_utxos = backend::get_script_list_unspent(&client, &address);
+
+                for utxo in address_utxos {
+                    list_unspent.push(wallet::UTXOInfo { 
+                        address: address.clone(), 
+                        client_seckey,
+                        client_pubkey,
+                        server_pubkey,
+                        aggregated_pubkey, 
+                        height: utxo.height, 
+                        tx_hash: utxo.tx_hash, 
+                        tx_pos: utxo.tx_pos, 
+                        value: utxo.value
+                    });
+                }
+            }
+
+            list_unspent.sort_by(|a, b| a.value.cmp(&b.value));
+
+            let mut previous_outputs = Vec::<wallet::UTXOInfo>::new(); 
+
+            for utxo in list_unspent {
+                
+                let input_amount: u64 = previous_outputs.iter().map(|s| s.value).sum();
+
+                if (input_amount) > (amount + fees) {
+                    break;
+                } else {
+                    previous_outputs.push(utxo);
+                }
+            }
+
+            let input_amount: u64 = previous_outputs.iter().map(|s| s.value).sum();
+            println!("input_amount: {}", input_amount);
+            println!("amount + fee: {}", (amount + fees));
+
+            if (input_amount) < (amount + fees) {
+                let res = json!({
+                    "error": "Not enough funds",
+                });
+                println!("{}", serde_json::to_string_pretty(&res).unwrap());
+                return;
+            }
+
+            let input_amount_in_sats = bitcoin::Amount::from_sat(input_amount);
+            let fees_amount_in_sats = bitcoin::Amount::from_sat(fees);
+
+            let change_amount = input_amount_in_sats
+                .checked_sub(amount_to_send_in_sats)
+                .and_then(|x| x.checked_sub(fees_amount_in_sats))
+                .ok_or("Fees more than input amount!").unwrap();
+
+            let outputs = vec![
+                TxOut { value: amount_to_send_in_sats.to_sat(), script_pubkey: to_address.script_pubkey() },
+                TxOut { value: change_amount.to_sat(), script_pubkey: change_address.script_pubkey() },
+            ];
+
+            println!("outputs: {}", serde_json::to_string_pretty(&outputs).unwrap());
         }
     }
 

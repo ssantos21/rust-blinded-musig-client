@@ -16,7 +16,7 @@ pub struct ServerPublicKeyResponsePayload<'r> {
     server_pubkey: &'r str,
 }
 
-pub async fn create_agg_pub_key(pool: &sqlx::Pool<Sqlite>, client_secret_key: &SecretKey, client_pubkey: &PublicKey, bip32index: u32, network: Network) -> Result<(XOnlyPublicKey,Address), CError> {
+pub async fn create_agg_pub_key(pool: &sqlx::Pool<Sqlite>, client_pubkey: &PublicKey, network: Network) -> Result<Address, CError> {
     let endpoint = "http://127.0.0.1:8000";
     let path = "server_pubkey";
 
@@ -48,26 +48,27 @@ pub async fn create_agg_pub_key(pool: &sqlx::Pool<Sqlite>, client_secret_key: &S
 
     let address = Address::p2tr(&Secp256k1::new(), agg_pk, None, network);
 
-    let query = "INSERT INTO signer_data (bip32_index, client_seckey, client_pubkey, server_pubkey, aggregated_key, p2tr_address) VALUES ($1, $2, $3, $4, $5, $6)";
+    let query = "\
+        UPDATE signer_data \
+        SET server_pubkey= $1, aggregated_pubkey = $2, p2tr_agg_address = $3 \
+        WHERE client_pubkey = $4";
 
     let _ = sqlx::query(query)
-        .bind(bip32index)
-        .bind(&client_secret_key.secret_bytes().to_vec())
-        .bind(&client_pubkey.serialize().to_vec())
         .bind(&server_pubkey.serialize().to_vec())
         .bind(&agg_pk.serialize().to_vec())
         .bind(&address.to_string())
+        .bind(&client_pubkey.serialize().to_vec())
         .execute(pool)
         .await
         .unwrap();
 
-    Ok((agg_pk, address))
+    Ok(address)
 
 }
 
 pub async fn list_agg_pub_keys(pool: &sqlx::Pool<Sqlite>) -> Result<Vec<String>, CError> {
     // Query to fetch data
-    let rows = sqlx::query("SELECT aggregated_key FROM signer_data")
+    let rows = sqlx::query("SELECT aggregated_pubkey FROM signer_data")
         .fetch_all(pool)
         .await
         .unwrap();
@@ -75,7 +76,7 @@ pub async fn list_agg_pub_keys(pool: &sqlx::Pool<Sqlite>) -> Result<Vec<String>,
     let mut aggregated_pubkeys = Vec::<String>::new();
 
     for row in rows {
-        let public_key_bytes = row.get::<Option<Vec<u8>>, _>("aggregated_key");
+        let public_key_bytes = row.get::<Option<Vec<u8>>, _>("aggregated_pubkey");
 
         if public_key_bytes.is_some() {
             let aggregated_pubkey = secp256k1_zkp::XOnlyPublicKey::from_slice(&public_key_bytes.unwrap()).unwrap();
@@ -113,7 +114,7 @@ pub async fn sign_message(pool: &sqlx::Pool<Sqlite>, agg_pub_key: String, messag
 
     let agg_pub_key_bytes = hex::decode(agg_pub_key).unwrap();
 
-    let query = "SELECT client_seckey, client_pubkey, server_pubkey FROM signer_data WHERE aggregated_key = $1";
+    let query = "SELECT client_seckey, client_pubkey, server_pubkey FROM signer_data WHERE aggregated_pubkey = $1";
 
     let row = sqlx::query(query)
         .bind(&agg_pub_key_bytes)

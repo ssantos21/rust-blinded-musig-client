@@ -11,7 +11,7 @@ use serde::{Serialize, Deserialize};
 use serde_json::json;
 use sqlx::{SqlitePool, Sqlite, migrate::MigrateDatabase};
 
-use crate::{addresses::{generate_new_key, get_next_bip32_index}, wallet::get_all_addresses};
+use crate::{addresses::{generate_new_key, get_next_bip32_index}, wallet::{get_all_addresses, create_transaction}};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -139,9 +139,9 @@ async fn main() {
 
             let to_address = Address::from_str(&address).unwrap().require_network(network).unwrap();
 
-            let public_key = generate_new_key(&pool, network, true).await;
-            let change_address = musig::create_agg_pub_key(&pool, &&public_key, network).await.unwrap();
-            
+           let public_key = generate_new_key(&pool, network, true).await;
+           let change_address = musig::create_agg_pub_key(&pool, &&public_key, network).await.unwrap();
+
             let amount_to_send_in_sats = bitcoin::Amount::from_sat(amount);
 
             let mut list_unspent = Vec::<wallet::UTXOInfo>::new(); 
@@ -213,7 +213,19 @@ async fn main() {
                 TxOut { value: change_amount.to_sat(), script_pubkey: change_address.script_pubkey() },
             ];
 
-            println!("outputs: {}", serde_json::to_string_pretty(&outputs).unwrap());
+            // println!("outputs: {}", serde_json::to_string_pretty(&outputs).unwrap());
+
+            let (tx, unsigned_tx) = create_transaction(&previous_outputs, &outputs).await.unwrap();
+            let tx_hex_string = bitcoin::consensus::encode::serialize_hex(&tx);
+            let unsigned_tx_hex_string = bitcoin::consensus::encode::serialize_hex(&unsigned_tx);
+
+            println!("tx_hex:      {}", tx_hex_string);
+            println!("unsigned_tx: {}", unsigned_tx_hex_string);
+
+            let tx_bytes = bitcoin::consensus::encode::serialize(&tx);
+            let txid = backend::transaction_broadcast_raw(&client, &tx_bytes);
+
+            println!("txid: {}", txid);
         }
     }
 
